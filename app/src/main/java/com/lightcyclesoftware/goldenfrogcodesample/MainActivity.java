@@ -1,18 +1,23 @@
 package com.lightcyclesoftware.goldenfrogcodesample;
 
+import android.app.Activity;
 import android.app.Dialog;
 import android.app.PendingIntent;
+import android.content.BroadcastReceiver;
+import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.IntentSender;
+import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.location.Location;
 import android.support.v4.app.DialogFragment;
 import android.support.v4.app.FragmentActivity;
 import android.os.Bundle;
+import android.support.v4.content.LocalBroadcastManager;
 import android.util.Log;
 import android.view.View;
 import android.widget.Button;
-
 import com.google.android.gms.common.ConnectionResult;
 import com.google.android.gms.common.GooglePlayServicesUtil;
 import com.google.android.gms.common.api.GoogleApiClient;
@@ -25,20 +30,27 @@ import com.google.android.gms.maps.CameraUpdateFactory;
 import com.google.android.gms.maps.GoogleMap;
 import com.google.android.gms.maps.OnMapReadyCallback;
 import com.google.android.gms.maps.SupportMapFragment;
+import com.google.android.gms.maps.model.BitmapDescriptorFactory;
+import com.google.android.gms.maps.model.CameraPosition;
 import com.google.android.gms.maps.model.Circle;
 import com.google.android.gms.maps.model.CircleOptions;
 import com.google.android.gms.maps.model.LatLng;
 import com.google.android.gms.maps.model.Marker;
 import com.google.android.gms.maps.model.MarkerOptions;
 
-public class MainActivity extends FragmentActivity implements OnMapReadyCallback, GoogleApiClient.ConnectionCallbacks, GoogleApiClient.OnConnectionFailedListener, ResultCallback<Status>, View.OnClickListener {
+public class MainActivity extends FragmentActivity implements OnMapReadyCallback, GoogleApiClient.ConnectionCallbacks, GoogleApiClient.OnConnectionFailedListener, ResultCallback<Status>, View.OnClickListener, GoogleMap.OnCameraChangeListener {
 
     private static boolean mainActivityIsOpen;
 
     private GoogleMap mMap; // Might be null if Google Play services APK is not available.
     private GoogleApiClient mGoogleApiClient;
     private Location mLastLocation;
+    private Location mGeofenceCrossingLocation;
     private Marker mMarker;
+    private Marker mGeofenceCrossingMarker;
+    private MarkerOptions mMarkerOptions;
+    private MarkerOptions mGeofenceCrossingMarkerOptions;
+    private CameraPosition mCameraPosition;
     private Circle mCircle;
     private Button mButton;
     // Global constants
@@ -47,7 +59,7 @@ public class MainActivity extends FragmentActivity implements OnMapReadyCallback
      * This code is returned in Activity.onActivityResult
      */
 
-    private final float KM_PER_MILE = 1609.34f;
+    private final float METERS_PER_MILE = 1609.34f;
     private final static int CONNECTION_FAILURE_RESOLUTION_REQUEST = 9000;
 
     // Request code to use when launching the resolution activity
@@ -61,13 +73,17 @@ public class MainActivity extends FragmentActivity implements OnMapReadyCallback
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
-        setUpMapIfNeeded();
-        buildGoogleApiClient();
         mainActivityIsOpen = true;
         mButton = (Button)findViewById(R.id.resetButton);
         mButton.setOnClickListener(this);
+        setUpMapIfNeeded();
     }
 
+    @Override
+    protected void onNewIntent(Intent intent)
+    {
+        super.onNewIntent(intent);
+    }
     protected synchronized void buildGoogleApiClient() {
         mGoogleApiClient = new GoogleApiClient.Builder(this)
                 .addConnectionCallbacks(this)
@@ -79,14 +95,32 @@ public class MainActivity extends FragmentActivity implements OnMapReadyCallback
     @Override
     protected void onResume() {
         super.onResume();
-        setUpMapIfNeeded();
+
         mainActivityIsOpen = true;
+        SharedPreferences mySharedPreferences = getApplicationContext().getSharedPreferences(MainActivity.class.getName(), Activity.MODE_PRIVATE);
+
+        String restoredText = mySharedPreferences.getString("mGeofenceCrossingLocation", null);
+        /*
+        if (restoredText != null) {
+            Log.d("goldenFrog", "we updated");
+            mGeofenceCrossingLocation = GeofenceUtils.unmarshall(restoredText.getBytes(), Location.CREATOR);
+        }*/
+        IntentFilter filter=new IntentFilter(MainActivity.class.getName());
+
+        LocalBroadcastManager.getInstance(this)
+                .registerReceiver(onGeofenceExit, filter);
+        restoreAppState();
+
     }
 
     @Override
     protected void onPause() {
-        super.onPause();
         mainActivityIsOpen = false;
+        LocalBroadcastManager.getInstance(this)
+                .unregisterReceiver(onGeofenceExit);
+        saveAppState();
+        super.onPause();
+
     }
 
     /**
@@ -128,32 +162,69 @@ public class MainActivity extends FragmentActivity implements OnMapReadyCallback
      */
     private void setUpMap() {
        if (mMap != null) {
+           mMap.setOnCameraChangeListener(this);
            mLastLocation = LocationServices.FusedLocationApi.getLastLocation(mGoogleApiClient);
            if (mLastLocation != null) {
-               if (!(mMarker == null && mCircle == null)) {
+               if (!(mMarker == null)) {
                    mMarker.remove();
+               }
+
+               if (!(mGeofenceCrossingMarker == null)) {
+                   mGeofenceCrossingMarker.remove();
+               }
+
+               if (!(mCircle == null)) {
                    mCircle.remove();
                }
-               LatLng mLatLng = new LatLng(mLastLocation.getLatitude(), mLastLocation.getLongitude());
-               mMarker = mMap.addMarker(new MarkerOptions().position(mLatLng).title("My Location"));
-               mCircle = mMap.addCircle(new CircleOptions()
-                       .center(mLatLng)
-                       .radius(250)
-                       .strokeColor(Color.RED)
-                       .fillColor(Color.BLUE));
 
-               mMap.animateCamera(CameraUpdateFactory.newLatLngZoom(mLatLng, 16));
+               LatLng mLatLng = new LatLng(mLastLocation.getLatitude(), mLastLocation.getLongitude());
+               if (mMarkerOptions == null) {
+                   mMarkerOptions = new MarkerOptions().position(mLatLng).title("My Location");
+                   mMarker = mMap.addMarker(mMarkerOptions);
+                   mCircle = mMap.addCircle(new CircleOptions()
+                           .center(mLatLng)
+                           .radius(METERS_PER_MILE)
+                           .strokeColor(Color.RED)
+                           .fillColor(Color.argb(127, 0, 0, 255)));
+                  // mMap.animateCamera(CameraUpdateFactory.newLatLngZoom(mLatLng, 16));
+               } else {
+                   mMarker = mMap.addMarker(mMarkerOptions);
+                   mCircle = mMap.addCircle(new CircleOptions()
+                           .center(mMarkerOptions.getPosition())
+                           .radius(METERS_PER_MILE)
+                           .strokeColor(Color.RED)
+                           .fillColor(Color.argb(127, 0, 0, 255)));
+                  // mMap.moveCamera(CameraUpdateFactory.newLatLngZoom(mMarkerOptions.getPosition(), 16));
+               }
+
+               if (mGeofenceCrossingMarkerOptions != null) {
+                   mGeofenceCrossingMarker = mMap.addMarker(mGeofenceCrossingMarkerOptions);
+               }
+
                mMap.setMyLocationEnabled(true);
-               Geofence mGeofence = new Geofence.Builder().setCircularRegion(mLatLng.latitude, mLatLng.longitude, 250.0f)
-                       .setExpirationDuration(Geofence.NEVER_EXPIRE)
-                       .setLoiteringDelay(10000)
-                       .setTransitionTypes(Geofence.GEOFENCE_TRANSITION_EXIT | Geofence.GEOFENCE_TRANSITION_DWELL | Geofence.GEOFENCE_TRANSITION_ENTER)
-                       .setRequestId("goldenFrog").build();
-               GeofencingRequest mGeofencingRequest = new GeofencingRequest.Builder().addGeofence(mGeofence).build();
-               PendingIntent mPendingIntent = PendingIntent.getService(this, 0,
-                       new Intent(this, GeoFenceIntentService.class), PendingIntent.FLAG_UPDATE_CURRENT);
-               PendingResult<Status> mPendingResult = LocationServices.GeofencingApi.addGeofences(mGoogleApiClient, mGeofencingRequest, mPendingIntent);
-               mPendingResult.setResultCallback(this);
+
+               if (mCameraPosition == null) {
+                   mMap.animateCamera(CameraUpdateFactory.newLatLngZoom(mLatLng, 13));
+
+                   //mCameraPosition = mMap.getCameraPosition();
+               } else {
+                   mMap.moveCamera(CameraUpdateFactory.newCameraPosition(mCameraPosition));
+                   //mCameraPosition = mMap.getCameraPosition();
+               }
+
+               if (mGeofenceCrossingMarkerOptions == null  && mainActivityIsOpen) {
+                   Log.d("goldenFrog", "creating Geofence...");
+                   Geofence mGeofence = new Geofence.Builder().setCircularRegion(mMarkerOptions.getPosition().latitude, mMarkerOptions.getPosition().longitude, METERS_PER_MILE)
+                           .setExpirationDuration(Geofence.NEVER_EXPIRE)
+                           .setLoiteringDelay(10000)
+                           .setTransitionTypes(Geofence.GEOFENCE_TRANSITION_EXIT)
+                           .setRequestId("goldenFrog").build();
+                   GeofencingRequest mGeofencingRequest = new GeofencingRequest.Builder().addGeofence(mGeofence).build();
+                   PendingIntent mPendingIntent = PendingIntent.getService(this, 0,
+                           new Intent(this, GeoFenceIntentService.class), PendingIntent.FLAG_UPDATE_CURRENT);
+                   PendingResult<Status> mPendingResult = LocationServices.GeofencingApi.addGeofences(mGoogleApiClient, mGeofencingRequest, mPendingIntent);
+                   mPendingResult.setResultCallback(this);
+               }
            }
        }
     }
@@ -161,6 +232,7 @@ public class MainActivity extends FragmentActivity implements OnMapReadyCallback
     @Override
     public void onMapReady(GoogleMap googleMap) {
         mMap = googleMap;
+        setUpMap();
     }
 
     @Override
@@ -196,6 +268,7 @@ public class MainActivity extends FragmentActivity implements OnMapReadyCallback
     @Override
     protected void onStart() {
         super.onStart();
+        buildGoogleApiClient();
         if (!mResolvingError) {  // more about this later
             mGoogleApiClient.connect();
         }
@@ -207,6 +280,20 @@ public class MainActivity extends FragmentActivity implements OnMapReadyCallback
         super.onStop();
     }
 
+    @Override
+    public void onSaveInstanceState(Bundle savedInstanceState) {
+        super.onSaveInstanceState(savedInstanceState);
+        saveAppState();
+    }
+
+    @Override
+    public void onRestoreInstanceState(Bundle savedInstanceState) {
+        super.onRestoreInstanceState(savedInstanceState);
+        restoreAppState();
+        setUpMap();
+    }
+
+    /*
     private boolean servicesConnected() {
         // Check that Google Play services is available
         int resultCode =
@@ -245,6 +332,7 @@ public class MainActivity extends FragmentActivity implements OnMapReadyCallback
             return false;
         }
     }
+    */
 
     @Override
     public void onResult(Status status) {
@@ -254,8 +342,41 @@ public class MainActivity extends FragmentActivity implements OnMapReadyCallback
     @Override
     public void onClick(View v) {
         if (v.getId() == mButton.getId()) {
+            SharedPreferences mySharedPreferences = getSharedPreferences(MainActivity.class.getName(), Activity.MODE_PRIVATE);
+            SharedPreferences.Editor editor = mySharedPreferences.edit();
+            editor.remove("mGeofenceCrossingLocation");
+            editor.remove("mMarkerLat");
+            editor.remove("mMarkerLon");
+            editor.remove("mGeofenceCrossingMarkerLat");
+            editor.remove("mGeofenceCrossingMarkerLon");
+            editor.commit();
+            mGeofenceCrossingLocation = null;
+            if(mGeofenceCrossingMarker != null) {
+                mGeofenceCrossingMarker.remove();
+                mGeofenceCrossingMarker = null;
+            }
+            if(mMarker != null) {
+                mMarker.remove();
+                mMarker = null;
+            }
+
+            if (mCircle != null) {
+                mCircle.remove();
+                mCircle = null;
+            }
+
+            mMarkerOptions = null;
+            mGeofenceCrossingMarkerOptions = null;
+            if (mMap != null) {
+                mCameraPosition = null;
+            }
             setUpMap();
         }
+    }
+
+    @Override
+    public void onCameraChange(CameraPosition cameraPosition) {
+        mCameraPosition = cameraPosition;
     }
 
     // Define a DialogFragment that displays the error dialog
@@ -283,5 +404,111 @@ public class MainActivity extends FragmentActivity implements OnMapReadyCallback
 
     public static boolean mainActivityIsOpen() {
         return mainActivityIsOpen;
+    }
+
+    private BroadcastReceiver onGeofenceExit = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            mGeofenceCrossingLocation = (Location) intent.getParcelableExtra(GeoFenceIntentService.EXTRA_MESSAGE);
+            mGeofenceCrossingMarkerOptions = new MarkerOptions().position(new LatLng(mGeofenceCrossingLocation.getLatitude(), mGeofenceCrossingLocation.getLongitude())).icon(BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_GREEN)).title("You Crossed Here");
+            Log.d("goldenFrog", "location updated");
+            if (mMap != null) {
+                //mCameraPosition =  CameraPosition.builder().target(LatLng(mGeofenceCrossingLocation.getLatitude(), mGeofenceCrossingLocation.getLongitude())).build();
+                mMap.animateCamera(CameraUpdateFactory.newLatLngZoom(new LatLng(mGeofenceCrossingLocation.getLatitude(), mGeofenceCrossingLocation.getLongitude()), 13));
+                //mCameraPosition = mMap.getCameraPosition();
+            }
+            setUpMap();
+        }
+    };
+
+    private void saveAppState() {
+        String mStorageString = null;
+        SharedPreferences mySharedPreferences = getSharedPreferences(MainActivity.class.getName(), Activity.MODE_PRIVATE);
+        SharedPreferences.Editor editor = mySharedPreferences.edit();
+        //String mLocationString = new String(GeofenceUtils.marshall(mGeofenceCrossingLocation));
+        //editor.putString("mGeofenceCrossingLocation", mLocationString);
+        mStorageString = mMarker != null ? Double.toString(mMarker.getPosition().latitude) : null;
+        editor.putString("mMarkerLat", mStorageString);
+        mStorageString = mMarker != null ? Double.toString(mMarker.getPosition().longitude) : null;
+        editor.putString("mMarkerLon", mStorageString);
+        mStorageString = mGeofenceCrossingMarker != null ? Double.toString(mGeofenceCrossingMarker.getPosition().latitude) : null;
+        editor.putString("mGeofenceCrossingMarkerLat", mStorageString);
+        mStorageString = mGeofenceCrossingMarker != null ? Double.toString(mGeofenceCrossingMarker.getPosition().longitude) : null;
+        editor.putString("mGeofenceCrossingMarkerLon", mStorageString);
+        if (mMap != null) {
+            editor.putFloat("mMapZoomLevel", mMap.getCameraPosition().zoom);
+            editor.putFloat("mMapBearing", mMap.getCameraPosition().bearing);
+            editor.putFloat("mMapTilt", mMap.getCameraPosition().tilt);
+        }
+        mStorageString = mMap != null ? Double.toString(mMap.getCameraPosition().target.latitude) : null;
+        editor.putString("mMapTargetLat", mStorageString);
+        mStorageString = mMap != null ? Double.toString(mMap.getCameraPosition().target.longitude) : null;
+        editor.putString("mMapTargetLon", mStorageString);
+        editor.commit();
+    }
+
+    private void restoreAppState() {
+        SharedPreferences mySharedPreferences = getApplicationContext().getSharedPreferences(MainActivity.class.getName(), Activity.MODE_PRIVATE);
+        String restoredText = mySharedPreferences.getString("mGeofenceCrossingLocation", null);
+        Double tmpLat = null;
+        Double tmpLon = null;
+
+        mMarkerOptions = null;
+        mGeofenceCrossingMarkerOptions = null;
+
+        restoredText = mySharedPreferences.getString("mMarkerLat", null);
+        if (restoredText != null) {
+            tmpLat = Double.parseDouble(restoredText);
+        }
+
+        restoredText = mySharedPreferences.getString("mMarkerLon", null);
+        if (restoredText != null) {
+            tmpLon = Double.parseDouble(restoredText);
+        }
+
+        if (tmpLat != null && tmpLon != null) {
+            mMarkerOptions = new MarkerOptions().position(new LatLng(tmpLat, tmpLon)).title("My Location");
+        }
+
+        tmpLat = null;
+        tmpLon = null;
+
+        restoredText = mySharedPreferences.getString("mGeofenceCrossingMarkerLat", null);
+        if (restoredText != null) {
+            tmpLat = Double.parseDouble(restoredText);
+        }
+
+        restoredText = mySharedPreferences.getString("mGeofenceCrossingMarkerLon", null);
+        if (restoredText != null) {
+            tmpLon = Double.parseDouble(restoredText);
+        }
+
+        if (tmpLat != null && tmpLon != null) {
+            mGeofenceCrossingMarkerOptions = new MarkerOptions().position(new LatLng(tmpLat, tmpLon)).icon(BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_GREEN)).title("You Crossed Here");
+        }
+
+        Float tmpZoom = null;
+        Float tmpBearing = null;
+        Float tmpTilt = null;
+        tmpLat = null;
+        tmpLon = null;
+
+        tmpZoom = mySharedPreferences.getFloat("mMapZoomLevel", -1);
+        tmpBearing = mySharedPreferences.getFloat("mMapBearing", -1);
+        tmpTilt = mySharedPreferences.getFloat("mMapTilt", -1);
+
+        restoredText = mySharedPreferences.getString("mMapTargetLat", null);
+        if (restoredText != null) {
+            tmpLat = Double.parseDouble(restoredText);
+        }
+
+        restoredText = mySharedPreferences.getString("mMapTargetLon", null);
+        if (restoredText != null) {
+            tmpLon = Double.parseDouble(restoredText);
+        }
+
+        if (tmpLat != null && tmpLon != null && tmpZoom != -1 && tmpBearing != -1 && tmpTilt != -1) {
+            mCameraPosition = CameraPosition.builder().zoom(tmpZoom).bearing(tmpBearing).tilt(tmpTilt).target(new LatLng(tmpLat, tmpLon)).build();
+        }
     }
 }
