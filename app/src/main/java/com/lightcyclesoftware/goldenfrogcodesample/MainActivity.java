@@ -9,23 +9,23 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.IntentSender;
 import android.content.SharedPreferences;
-import android.graphics.Color;
 import android.location.Location;
+import android.os.Bundle;
 import android.support.v4.app.DialogFragment;
 import android.support.v4.app.FragmentActivity;
-import android.os.Bundle;
 import android.support.v4.content.LocalBroadcastManager;
 import android.util.Log;
 import android.view.View;
 import android.widget.Button;
+
 import com.google.android.gms.common.ConnectionResult;
-import com.google.android.gms.common.GooglePlayServicesUtil;
 import com.google.android.gms.common.api.GoogleApiClient;
 import com.google.android.gms.common.api.PendingResult;
 import com.google.android.gms.common.api.ResultCallback;
 import com.google.android.gms.common.api.Status;
+import com.google.android.gms.location.Geofence;
+import com.google.android.gms.location.GeofencingRequest;
 import com.google.android.gms.location.LocationServices;
-import com.google.android.gms.location.*;
 import com.google.android.gms.maps.CameraUpdateFactory;
 import com.google.android.gms.maps.GoogleMap;
 import com.google.android.gms.maps.OnMapReadyCallback;
@@ -33,7 +33,6 @@ import com.google.android.gms.maps.SupportMapFragment;
 import com.google.android.gms.maps.model.BitmapDescriptorFactory;
 import com.google.android.gms.maps.model.CameraPosition;
 import com.google.android.gms.maps.model.Circle;
-import com.google.android.gms.maps.model.CircleOptions;
 import com.google.android.gms.maps.model.LatLng;
 import com.google.android.gms.maps.model.Marker;
 import com.google.android.gms.maps.model.MarkerOptions;
@@ -41,8 +40,7 @@ import com.google.android.gms.maps.model.MarkerOptions;
 public class MainActivity extends FragmentActivity implements OnMapReadyCallback, GoogleApiClient.ConnectionCallbacks, GoogleApiClient.OnConnectionFailedListener, ResultCallback<Status>, View.OnClickListener, GoogleMap.OnCameraChangeListener {
 
     private static boolean mainActivityIsOpen;
-
-    private GoogleMap mMap; // Might be null if Google Play services APK is not available.
+    private GoogleMap mMap;
     private GoogleApiClient mGoogleApiClient;
     private Location mLastLocation;
     private Location mGeofenceCrossingLocation;
@@ -53,37 +51,26 @@ public class MainActivity extends FragmentActivity implements OnMapReadyCallback
     private CameraPosition mCameraPosition;
     private Circle mCircle;
     private Button mButton;
-    // Global constants
-    /*
-     * Define a request code to send to Google Play services
-     * This code is returned in Activity.onActivityResult
-     */
-
-    private final float METERS_PER_MILE = 1609.34f;
-    private final static int CONNECTION_FAILURE_RESOLUTION_REQUEST = 9000;
-
-    // Request code to use when launching the resolution activity
-    private static final int REQUEST_RESOLVE_ERROR = 1001;
-    // Unique tag for the error dialog fragment
-    private static final String DIALOG_ERROR = "dialog_error";
-    // Bool to track whether the app is already resolving an error
     private boolean mResolvingError = false;
+
+    private static final int REQUEST_RESOLVE_ERROR = 1001;
+    public static final float METERS_PER_MILE = 1609.34f;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
         mainActivityIsOpen = true;
-        mButton = (Button)findViewById(R.id.resetButton);
+        mButton = (Button) findViewById(R.id.resetButton);
         mButton.setOnClickListener(this);
         setUpMapIfNeeded();
     }
 
     @Override
-    protected void onNewIntent(Intent intent)
-    {
+    protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
     }
+
     protected synchronized void buildGoogleApiClient() {
         mGoogleApiClient = new GoogleApiClient.Builder(this)
                 .addConnectionCallbacks(this)
@@ -95,22 +82,11 @@ public class MainActivity extends FragmentActivity implements OnMapReadyCallback
     @Override
     protected void onResume() {
         super.onResume();
-
         mainActivityIsOpen = true;
-        SharedPreferences mySharedPreferences = getApplicationContext().getSharedPreferences(MainActivity.class.getName(), Activity.MODE_PRIVATE);
-
-        String restoredText = mySharedPreferences.getString("mGeofenceCrossingLocation", null);
-        /*
-        if (restoredText != null) {
-            Log.d("goldenFrog", "we updated");
-            mGeofenceCrossingLocation = GeofenceUtils.unmarshall(restoredText.getBytes(), Location.CREATOR);
-        }*/
-        IntentFilter filter=new IntentFilter(MainActivity.class.getName());
-
+        IntentFilter filter = new IntentFilter(MainActivity.class.getName());
         LocalBroadcastManager.getInstance(this)
                 .registerReceiver(onGeofenceExit, filter);
         restoreAppState();
-
     }
 
     @Override
@@ -123,110 +99,88 @@ public class MainActivity extends FragmentActivity implements OnMapReadyCallback
 
     }
 
-    /**
-     * Sets up the map if it is possible to do so (i.e., the Google Play services APK is correctly
-     * installed) and the map has not already been instantiated.. This will ensure that we only ever
-     * call {@link #setUpMap()} once when {@link #mMap} is not null.
-     * <p/>
-     * If it isn't installed {@link SupportMapFragment} (and
-     * {@link com.google.android.gms.maps.MapView MapView}) will show a prompt for the user to
-     * install/update the Google Play services APK on their device.
-     * <p/>
-     * A user can return to this FragmentActivity after following the prompt and correctly
-     * installing/updating/enabling the Google Play services. Since the FragmentActivity may not
-     * have been completely destroyed during this process (it is likely that it would only be
-     * stopped or paused), {@link #onCreate(Bundle)} may not be called again so we should call this
-     * method in {@link #onResume()} to guarantee that it will be called.
-     */
+
     private void setUpMapIfNeeded() {
         // Do a null check to confirm that we have not already instantiated the map.
         if (mMap == null) {
-            /*
-            //Old-School Google Maps 2.0 Method
-            // Try to obtain the map from the SupportMapFragment.
-            //mMap = ((SupportMapFragment) getSupportFragmentManager().findFragmentById(R.id.map)).getMap();
-                // Check if we were successful in obtaining the map.
-                if (mMap != null) {
-                setUpMap();
-            }
-            */
             ((SupportMapFragment) getSupportFragmentManager().findFragmentById(R.id.map)).getMapAsync(this);
         }
     }
 
-    /**
-     * This is where we can add markers or lines, add listeners or move the camera. In this case, we
-     * just add a marker near Africa.
-     * <p/>
-     * This should only be called once and when we are sure that {@link #mMap} is not null.
-     */
+
     private void setUpMap() {
-       if (mMap != null) {
-           mMap.setOnCameraChangeListener(this);
-           mLastLocation = LocationServices.FusedLocationApi.getLastLocation(mGoogleApiClient);
-           if (mLastLocation != null) {
-               if (!(mMarker == null)) {
-                   mMarker.remove();
-               }
+        if (mMap != null) {
+            mMap.setOnCameraChangeListener(this);
+            mLastLocation = LocationServices.FusedLocationApi.getLastLocation(mGoogleApiClient);
+            if (mLastLocation != null) {
+                if (!(mMarker == null)) {
+                    mMarker.remove();
+                }
 
-               if (!(mGeofenceCrossingMarker == null)) {
-                   mGeofenceCrossingMarker.remove();
-               }
+                if (!(mGeofenceCrossingMarker == null)) {
+                    mGeofenceCrossingMarker.remove();
+                }
 
-               if (!(mCircle == null)) {
-                   mCircle.remove();
-               }
+                if (!(mCircle == null)) {
+                    mCircle.remove();
+                }
 
-               LatLng mLatLng = new LatLng(mLastLocation.getLatitude(), mLastLocation.getLongitude());
-               if (mMarkerOptions == null) {
-                   mMarkerOptions = new MarkerOptions().position(mLatLng).title("My Location");
-                   mMarker = mMap.addMarker(mMarkerOptions);
+                LatLng mLatLng = new LatLng(mLastLocation.getLatitude(), mLastLocation.getLongitude());
+                if (mMarkerOptions == null) {
+
+
+                    mMarkerOptions = new MarkerOptions().position(mLatLng).title("Start");
+                    mMarker = mMap.addMarker(mMarkerOptions);
+                   /*For testing geofence radius*/
+                   /*
                    mCircle = mMap.addCircle(new CircleOptions()
                            .center(mLatLng)
                            .radius(METERS_PER_MILE)
                            .strokeColor(Color.RED)
-                           .fillColor(Color.argb(127, 0, 0, 255)));
-                  // mMap.animateCamera(CameraUpdateFactory.newLatLngZoom(mLatLng, 16));
-               } else {
-                   mMarker = mMap.addMarker(mMarkerOptions);
+                           .fillColor(Color.argb(127, 0, 0, 255)));*/
+                    // mMap.animateCamera(CameraUpdateFactory.newLatLngZoom(mLatLng, 16));
+                } else {
+
+
+                    mMarker = mMap.addMarker(mMarkerOptions);
+                   /*For testing geofence radius*/
+                   /*
                    mCircle = mMap.addCircle(new CircleOptions()
                            .center(mMarkerOptions.getPosition())
                            .radius(METERS_PER_MILE)
                            .strokeColor(Color.RED)
                            .fillColor(Color.argb(127, 0, 0, 255)));
-                  // mMap.moveCamera(CameraUpdateFactory.newLatLngZoom(mMarkerOptions.getPosition(), 16));
-               }
+                           */
+                    // mMap.moveCamera(CameraUpdateFactory.newLatLngZoom(mMarkerOptions.getPosition(), 16));
+                }
 
-               if (mGeofenceCrossingMarkerOptions != null) {
-                   mGeofenceCrossingMarker = mMap.addMarker(mGeofenceCrossingMarkerOptions);
-               }
+                if (mGeofenceCrossingMarkerOptions != null) {
+                    mGeofenceCrossingMarker = mMap.addMarker(mGeofenceCrossingMarkerOptions);
+                }
 
-               mMap.setMyLocationEnabled(true);
+                mMap.setMyLocationEnabled(true);
 
-               if (mCameraPosition == null) {
-                   mMap.animateCamera(CameraUpdateFactory.newLatLngZoom(mLatLng, 13));
+                if (mCameraPosition == null) {
+                    mMap.animateCamera(CameraUpdateFactory.newLatLngZoom(mLatLng, 13));
+                } else {
+                    mMap.moveCamera(CameraUpdateFactory.newCameraPosition(mCameraPosition));
+                }
 
-                   //mCameraPosition = mMap.getCameraPosition();
-               } else {
-                   mMap.moveCamera(CameraUpdateFactory.newCameraPosition(mCameraPosition));
-                   //mCameraPosition = mMap.getCameraPosition();
-               }
-
-               if (mGeofenceCrossingMarkerOptions == null  && mainActivityIsOpen) {
-                   Log.d("goldenFrog", "creating Geofence...");
-                   Geofence mGeofence = new Geofence.Builder().setCircularRegion(mMarkerOptions.getPosition().latitude, mMarkerOptions.getPosition().longitude, METERS_PER_MILE)
-                           .setExpirationDuration(Geofence.NEVER_EXPIRE)
-                           .setLoiteringDelay(10000)
-                           .setTransitionTypes(Geofence.GEOFENCE_TRANSITION_EXIT)
-                           .setRequestId("goldenFrog").build();
-                   GeofencingRequest mGeofencingRequest = new GeofencingRequest.Builder().addGeofence(mGeofence).build();
-                   PendingIntent mPendingIntent = PendingIntent.getService(this, 0,
-                           new Intent(this, GeoFenceIntentService.class), PendingIntent.FLAG_UPDATE_CURRENT);
-                   PendingResult<Status> mPendingResult = LocationServices.GeofencingApi.addGeofences(mGoogleApiClient, mGeofencingRequest, mPendingIntent);
-                   mPendingResult.setResultCallback(this);
-               }
-           }
-       }
+                if (mGeofenceCrossingMarkerOptions == null && mainActivityIsOpen) {
+                    Log.d("goldenFrog", "creating Geofence...");
+                    Geofence mGeofence = new Geofence.Builder().setCircularRegion(mMarkerOptions.getPosition().latitude, mMarkerOptions.getPosition().longitude, METERS_PER_MILE)
+                            .setExpirationDuration(Geofence.NEVER_EXPIRE)
+                            .setLoiteringDelay(10000)
+                            .setTransitionTypes(Geofence.GEOFENCE_TRANSITION_EXIT)
+                            .setRequestId("goldenFrog").build();
+                    GeofencingRequest mGeofencingRequest = new GeofencingRequest.Builder().addGeofence(mGeofence).build();
+                    PendingIntent mPendingIntent = PendingIntent.getService(this, 0,
+                            new Intent(this, GeoFenceIntentService.class), PendingIntent.FLAG_UPDATE_CURRENT);
+                    PendingResult<Status> mPendingResult = LocationServices.GeofencingApi.addGeofences(mGoogleApiClient, mGeofencingRequest, mPendingIntent);
+                    mPendingResult.setResultCallback(this);
+                }
+            }
+        }
     }
 
     @Override
@@ -259,8 +213,6 @@ public class MainActivity extends FragmentActivity implements OnMapReadyCallback
                 mGoogleApiClient.connect();
             }
         } else {
-            // Show dialog using GooglePlayServicesUtil.getErrorDialog()
-            //showErrorDialog(result.getErrorCode());
             mResolvingError = true;
         }
     }
@@ -293,47 +245,6 @@ public class MainActivity extends FragmentActivity implements OnMapReadyCallback
         setUpMap();
     }
 
-    /*
-    private boolean servicesConnected() {
-        // Check that Google Play services is available
-        int resultCode =
-                GooglePlayServicesUtil.
-                        isGooglePlayServicesAvailable(this);
-        // If Google Play services is available
-        if (ConnectionResult.SUCCESS == resultCode) {
-            // In debug mode, log the status
-            Log.d("Geofence Detection",
-                    "Google Play services is available.");
-            // Continue
-            return true;
-            // Google Play services was not available for some reason
-        } else {
-            // Get the error code
-            ConnectionResult mConnectionResult = new ConnectionResult(resultCode, null);
-            int errorCode = mConnectionResult.getErrorCode();
-            // Get the error dialog from Google Play services
-            Dialog errorDialog = GooglePlayServicesUtil.getErrorDialog(
-                    errorCode,
-                    this,
-                    CONNECTION_FAILURE_RESOLUTION_REQUEST);
-
-            // If Google Play services can provide an error dialog
-            if (errorDialog != null) {
-                // Create a new DialogFragment for the error dialog
-                ErrorDialogFragment errorFragment =
-                        new ErrorDialogFragment();
-                // Set the dialog in the DialogFragment
-                errorFragment.setDialog(errorDialog);
-                // Show the error dialog in the DialogFragment
-                errorFragment.show(
-                        getSupportFragmentManager(),
-                        "Geofence Detection");
-            }
-            return false;
-        }
-    }
-    */
-
     @Override
     public void onResult(Status status) {
         Log.d("goldenFrog", "Geofence status: " + status.isSuccess());
@@ -351,11 +262,11 @@ public class MainActivity extends FragmentActivity implements OnMapReadyCallback
             editor.remove("mGeofenceCrossingMarkerLon");
             editor.commit();
             mGeofenceCrossingLocation = null;
-            if(mGeofenceCrossingMarker != null) {
+            if (mGeofenceCrossingMarker != null) {
                 mGeofenceCrossingMarker.remove();
                 mGeofenceCrossingMarker = null;
             }
-            if(mMarker != null) {
+            if (mMarker != null) {
                 mMarker.remove();
                 mMarker = null;
             }
@@ -410,12 +321,10 @@ public class MainActivity extends FragmentActivity implements OnMapReadyCallback
         @Override
         public void onReceive(Context context, Intent intent) {
             mGeofenceCrossingLocation = (Location) intent.getParcelableExtra(GeoFenceIntentService.EXTRA_MESSAGE);
-            mGeofenceCrossingMarkerOptions = new MarkerOptions().position(new LatLng(mGeofenceCrossingLocation.getLatitude(), mGeofenceCrossingLocation.getLongitude())).icon(BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_GREEN)).title("You Crossed Here");
+            mGeofenceCrossingMarkerOptions = new MarkerOptions().position(new LatLng(mGeofenceCrossingLocation.getLatitude(), mGeofenceCrossingLocation.getLongitude())).icon(BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_GREEN)).title(getResources().getString(R.string.one_mile_message));
             Log.d("goldenFrog", "location updated");
             if (mMap != null) {
-                //mCameraPosition =  CameraPosition.builder().target(LatLng(mGeofenceCrossingLocation.getLatitude(), mGeofenceCrossingLocation.getLongitude())).build();
                 mMap.animateCamera(CameraUpdateFactory.newLatLngZoom(new LatLng(mGeofenceCrossingLocation.getLatitude(), mGeofenceCrossingLocation.getLongitude()), 13));
-                //mCameraPosition = mMap.getCameraPosition();
             }
             setUpMap();
         }
@@ -425,8 +334,6 @@ public class MainActivity extends FragmentActivity implements OnMapReadyCallback
         String mStorageString = null;
         SharedPreferences mySharedPreferences = getSharedPreferences(MainActivity.class.getName(), Activity.MODE_PRIVATE);
         SharedPreferences.Editor editor = mySharedPreferences.edit();
-        //String mLocationString = new String(GeofenceUtils.marshall(mGeofenceCrossingLocation));
-        //editor.putString("mGeofenceCrossingLocation", mLocationString);
         mStorageString = mMarker != null ? Double.toString(mMarker.getPosition().latitude) : null;
         editor.putString("mMarkerLat", mStorageString);
         mStorageString = mMarker != null ? Double.toString(mMarker.getPosition().longitude) : null;
@@ -467,7 +374,7 @@ public class MainActivity extends FragmentActivity implements OnMapReadyCallback
         }
 
         if (tmpLat != null && tmpLon != null) {
-            mMarkerOptions = new MarkerOptions().position(new LatLng(tmpLat, tmpLon)).title("My Location");
+            mMarkerOptions = new MarkerOptions().position(new LatLng(tmpLat, tmpLon)).title("Start");
         }
 
         tmpLat = null;
@@ -484,7 +391,7 @@ public class MainActivity extends FragmentActivity implements OnMapReadyCallback
         }
 
         if (tmpLat != null && tmpLon != null) {
-            mGeofenceCrossingMarkerOptions = new MarkerOptions().position(new LatLng(tmpLat, tmpLon)).icon(BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_GREEN)).title("You Crossed Here");
+            mGeofenceCrossingMarkerOptions = new MarkerOptions().position(new LatLng(tmpLat, tmpLon)).icon(BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_GREEN)).title(getResources().getString(R.string.one_mile_message));
         }
 
         Float tmpZoom = null;

@@ -2,6 +2,7 @@
 <resources>
 
     <string name="app_name">Golden Frog Code Sample</string>
-    <string name="title_activity_main">Map</string>
+    <string name="title_activity_main">Map Sample</string>
+    <string name="one_mile_message">You have traveled 1 mile</string>
 
 </resources>
