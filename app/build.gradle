@@ -3,6 +3,10 @@ apply plugin: 'com.android.application'
 android {
     compileSdkVersion 21
     buildToolsVersion "21.1.1"
+    
+    lintOptions {
+          abortOnError false
+      }
 
     defaultConfig {
         applicationId "com.lightcyclesoftware.goldenfrogcodesample"
